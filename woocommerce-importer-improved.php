@@ -1,12 +1,6 @@
 <?php
 /*
 Plugin Name: Woocommerce Importer Improved
-Description: A plugin that adds file upload functionality under WooCommerce menu
-Version: 1.0
-Author: Your Name
-Requires at least: 5.0
-Requires PHP: 7.2
-WC requires at least: 3.0
 Requires Plugins:  woocommerce
 */
 
@@ -191,20 +185,75 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
               do_action('wpml_switch_language', $language_code);
 
               foreach ($attr_values as $term_name) {
+                // First, check if the term exists in the current language
                 $term = get_term_by('name', $term_name, $taxonomy);
 
                 if (!$term) {
-                  // Term doesn't exist, create it
-                  $term_result = wp_insert_term($term_name, $taxonomy);
-                  if (!is_wp_error($term_result)) {
-                    $term_id = $term_result['term_id'];
+                  // Check if the term exists in any other language
+                  $terms_in_other_langs = get_terms([
+                    'taxonomy' => $taxonomy,
+                    'name' => $term_name,
+                    'hide_empty' => false
+                  ]);
 
-                    // Register the term for translation
-                    do_action('wpml_register_single_term', $term_id, $taxonomy, $language_code);
+                  if (!empty($terms_in_other_langs)) {
+                    // Term exists in another language, get its translation or create one
+                    foreach ($terms_in_other_langs as $existing_term) {
+                      $term_language = apply_filters('wpml_element_language_code', null, [
+                        'element_id' => $existing_term->term_id,
+                        'element_type' => $taxonomy
+                      ]);
 
-                    $term_ids[] = $term_id;
+                      if ($term_language !== $language_code) {
+                        // Get the translation if it exists
+                        $translated_term_id = apply_filters('wpml_object_id', $existing_term->term_id, $taxonomy, false, $language_code);
+
+                        if (!$translated_term_id) {
+                          // Create a new translation
+                          $new_term = wp_insert_term($term_name, $taxonomy);
+                          if (!is_wp_error($new_term)) {
+                            $term_id = $new_term['term_id'];
+
+                            // Get the trid of the original term
+                            $trid = apply_filters('wpml_element_trid', null, $existing_term->term_id, $taxonomy);
+
+                            // Register as translation of existing term
+                            do_action('wpml_set_element_language_details', [
+                              'element_id' => $term_id,
+                              'element_type' => $taxonomy,
+                              'trid' => $trid,
+                              'language_code' => $language_code,
+                              'source_language_code' => $term_language
+                            ]);
+
+                            $term_ids[] = $term_id;
+                          }
+                        } else {
+                          $term_ids[] = $translated_term_id;
+                        }
+                        break; // We only need one translation
+                      }
+                    }
+                  } else {
+                    // Term doesn't exist in any language, create new
+                    $new_term = wp_insert_term($term_name, $taxonomy);
+                    if (!is_wp_error($new_term)) {
+                      $term_id = $new_term['term_id'];
+
+                      // Register the new term with WPML
+                      do_action('wpml_set_element_language_details', [
+                        'element_id' => $term_id,
+                        'element_type' => $taxonomy,
+                        'trid' => null,
+                        'language_code' => $language_code,
+                        'source_language_code' => null
+                      ]);
+
+                      $term_ids[] = $term_id;
+                    }
                   }
                 } else {
+                  // Term exists in current language, use it
                   $term_ids[] = $term->term_id;
                 }
               }
@@ -274,16 +323,74 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
 
             foreach ($value as $cat_name) {
               $term = get_term_by('name', $cat_name, 'product_cat');
-              if ($term) {
-                $category_ids[] = $term->term_id;
-              } else {
-                $new_term = wp_insert_term($cat_name, 'product_cat');
 
-                if (!is_wp_error($new_term)) {
-                  // Register the category for translation
-                  do_action('wpml_register_single_term', $new_term['term_id'], 'product_cat', $language_code);
-                  $category_ids[] = $new_term['term_id'];
+              if (!$term) {
+                // Check if the category exists in any other language
+                $terms_in_other_langs = get_terms([
+                  'taxonomy' => 'product_cat',
+                  'name' => $cat_name,
+                  'hide_empty' => false
+                ]);
+
+                if (!empty($terms_in_other_langs)) {
+                  // Category exists in another language, get its translation or create one
+                  foreach ($terms_in_other_langs as $existing_term) {
+                    $term_language = apply_filters('wpml_element_language_code', null, [
+                      'element_id' => $existing_term->term_id,
+                      'element_type' => 'product_cat'
+                    ]);
+
+                    if ($term_language !== $language_code) {
+                      // Get the translation if it exists
+                      $translated_term_id = apply_filters('wpml_object_id', $existing_term->term_id, 'product_cat', false, $language_code);
+
+                      if (!$translated_term_id) {
+                        // Create a new translation
+                        $new_term = wp_insert_term($cat_name, 'product_cat');
+                        if (!is_wp_error($new_term)) {
+                          $term_id = $new_term['term_id'];
+
+                          // Get the trid of the original term
+                          $trid = apply_filters('wpml_element_trid', null, $existing_term->term_id, 'product_cat');
+
+                          // Register as translation of existing term
+                          do_action('wpml_set_element_language_details', [
+                            'element_id' => $term_id,
+                            'element_type' => 'product_cat',
+                            'trid' => $trid,
+                            'language_code' => $language_code,
+                            'source_language_code' => $term_language
+                          ]);
+
+                          $category_ids[] = $term_id;
+                        }
+                      } else {
+                        $category_ids[] = $translated_term_id;
+                      }
+                      break; // We only need one translation
+                    }
+                  }
+                } else {
+                  // Category doesn't exist in any language, create new
+                  $new_term = wp_insert_term($cat_name, 'product_cat');
+                  if (!is_wp_error($new_term)) {
+                    $term_id = $new_term['term_id'];
+
+                    // Register the new category with WPML
+                    do_action('wpml_set_element_language_details', [
+                      'element_id' => $term_id,
+                      'element_type' => 'product_cat',
+                      'trid' => null,
+                      'language_code' => $language_code,
+                      'source_language_code' => null
+                    ]);
+
+                    $category_ids[] = $term_id;
+                  }
                 }
+              } else {
+                // Category exists in current language, use it
+                $category_ids[] = $term->term_id;
               }
             }
 
