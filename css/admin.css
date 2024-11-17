@@ -1,0 +1,86 @@
+form {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+label.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.headers-wrapper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.headers-wrapper button[data-disabled="true"] {
+  opacity: 0.5;
+}
+
+.product-fields {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.product-fields .input-wrapper .field-wrapper {
+  height: 1.875rem;
+  box-shadow: 0 0 0 transparent;
+  border-radius: 4px;
+  border: 1px solid #8c8f94;
+  background-color: #fff;
+  color: #2c3338;
+  margin-top: 0.5rem;
+  outline: 2px solid #2271b1;
+  outline-offset: 2px;
+}
+
+.product-fields .input-wrapper .field-wrapper:not(:empty) {
+  background: #2271b1;
+  border-color: #2271b1;
+  color: #fff;
+  text-decoration: none;
+  text-shadow: none;
+  display: grid;
+  place-items: center;
+}
+
+.product-fields .input-wrapper .field-wrapper:empty:not(:hover) {
+  outline: 2px dashed #8c8f94;
+}
+
+.product-fields label.checkbox {
+  order: 2;
+  grid-column: 1/-1;
+}
+
+.product-fields .input-wrapper.advanced {
+  order: 3;
+}
+
+.product-fields:has(#show-advanced:not(:checked)) .input-wrapper.advanced {
+  display: none;
+}
+
+.product-fields p.submit {
+  order: 4;
+  grid-column: 1/-1;
+}
+
+.product-fields .input-wrapper input {
+  height: 0;
+  font-size: 0;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  position: fixed;
+  bottom: 0;
+}
