@@ -1,103 +1,4 @@
 <?php
-/*
-Plugin Name: Woocommerce Importer Improved
-Requires Plugins:  woocommerce
-*/
-
-define('WIM_PLUGIN_BASENAME', plugin_basename(__FILE__));
-define('WIM_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('WIM_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('WIM_MESSAGES_NAME', 'wim_messages');
-define('WIM_ERROR_CODE', 'wim_error');
-
-if (!defined('ABSPATH')) exit;
-
-// Add menu item under WooCommerce
-add_action(
-  'admin_menu',
-  function () {
-    add_submenu_page(
-      'woocommerce',
-      'Woocommerce Importer Improved',
-      'Woocommerce Importer Improved',
-      'manage_woocommerce',
-      'woocommerce-importer-improved',
-      'wim_render_page'
-    );
-  }
-);
-
-// Render the upload page
-function wim_render_page()
-{
-  include WIM_PLUGIN_DIR . 'templates/admin/wim.php';
-}
-
-// Add settings errors display
-add_action('admin_notices', function () {
-  settings_errors(WIM_MESSAGES_NAME);
-});
-
-// Activation hook
-register_activation_hook(__FILE__, function () {
-  if (class_exists('WooCommerce')) return;
-  deactivate_plugins(WIM_PLUGIN_BASENAME);
-  wp_die('This plugin requires WooCommerce to be installed and active.');
-});
-
-add_action('admin_enqueue_scripts', function ($hook) {
-  if ($hook != 'woocommerce_page_woocommerce-importer-improved') return;
-  wp_enqueue_style('wim-admin-styles', plugins_url('css/admin.css', __FILE__), [], '1.0.0');
-  wp_enqueue_script('wim-admin-script', plugins_url('js/admin.js', __FILE__), [], '1.0.0');
-});
-
-function wim_handle_upload($file, $csv_options)
-{
-  $separator = $csv_options['separator'];
-  $enclosure = $csv_options['enclosure'];
-  $escape = $csv_options['escape'];
-
-  try {
-    if ($file['error'] !== UPLOAD_ERR_OK) throw new Exception('Upload failed with error code: ' . $file['error']);
-    if (fopen($file['tmp_name'], "r") === false) throw new Exception('Failed to read file content.');
-
-    $handle = fopen($file['tmp_name'], "r");
-    $headers = fgetcsv($handle, 0, $separator, $enclosure, $escape);
-
-    $rows = [];
-    while (($row = fgetcsv($handle, 0, $separator, $enclosure, $escape)) !== false) {
-      $rows[] = $row;
-    }
-    fclose($handle);
-
-    return array(
-      "headers" => $headers,
-      "rows" => $rows,
-    );
-  } catch (Exception $e) {
-    add_settings_error(
-      WIM_MESSAGES_NAME,
-      WIM_ERROR_CODE,
-      $e->getMessage(),
-      'error'
-    );
-    return false;
-  }
-}
-
-function wim_notice($string, $type, ...$args)
-{
-  $escaped_args = array_map('esc_html', $args);
-  $full_string = vsprintf($string, $escaped_args);
-
-  return sprintf(
-    '<div class="notice notice-' . $type . ' ">
-	<p>%s</p>
-/   </div>',
-    $full_string
-  );
-}
-
 function wim_load_products($file_rows, $headers, $wim_product_fields)
 {
   $output = '';
@@ -107,6 +8,9 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
 
   // Get WPML default language
   $default_language = apply_filters('wpml_default_language', null);
+
+  // Cache for attribute terms to avoid redundant lookups
+  $attribute_terms_cache = [];
 
   foreach ($file_rows as $row) {
     try {
@@ -151,37 +55,35 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
       $acf_fields = [];
 
       foreach ($wim_product_fields as $field_key => $field_config) {
+        // Skip language_code and original_product_sku as we handled them above
         if (in_array($field_key, ['language_code', 'original_product_sku'])) {
           continue;
         }
 
+        // Get the mapped column index from the form submission
         $mapped_column = $_POST[$field_key] ?? '';
         if (empty($mapped_column)) continue;
 
+        // Get the column index
         $column_index = array_search($mapped_column, $headers);
         if ($column_index === false) continue;
 
         $value = $row[$column_index];
 
+        // Handle different field types
         switch ($field_config['type']) {
           case 'array':
+            // Convert comma-separated values to array
             $value = array_map('trim', explode(',', $value));
             break;
 
           case 'attribute':
-            if (!isset($original_product_id)) {
-              $original_product_id = null;
-            }
-
             if (!empty($value)) {
               $attr_values = array_map('trim', explode('|', $value));
               $taxonomy = 'pa_' . $field_key;
               $term_ids = [];
 
-              if ($is_translation && $original_product_id && !empty($original_product_id)) {
-                // Switch to default language first
-                do_action('wpml_switch_language', $default_language);
-
+              if ($is_translation && !empty($original_product_id)) {
                 // Get original product's attributes
                 $original_product = wc_get_product($original_product_id);
                 if ($original_product) {
@@ -191,36 +93,32 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
                     if ($original_attribute->get_name() === $taxonomy) {
                       $original_term_ids = $original_attribute->get_options();
 
+                      // Switch to default language to get original terms
+                      do_action('wpml_switch_language', $default_language);
+
                       // Process each translation value in order
                       foreach ($attr_values as $index => $translation_term_name) {
-
                         if (isset($original_term_ids[$index])) {
+                          // Get original term
                           $original_term = get_term($original_term_ids[$index], $taxonomy);
 
                           if ($original_term) {
-                            // Switch to translation language for creating/getting translated term
+                            // Switch to translation language
                             do_action('wpml_switch_language', $language_code);
 
-                            // First try to get existing translation
+                            // Get or create translation term
                             $translated_term_id = apply_filters('wpml_object_id', $original_term->term_id, $taxonomy, false, $language_code);
 
-                            var_dump("---------------------------------\n");
-                            var_dump("Product Code: $language_code \n");
-                            var_dump("Doing: $translation_term_name \n");
                             if (!$translated_term_id) {
-                              var_dump("Is the same, creating it in the $taxonomy\n");
-                              // Create new term in target language
-                              $new_term = wp_insert_term($translation_term_name, $taxonomy, array('slug' => slugify($translation_term_name . '-' . $language_code)));
-
+                              // Create new translation term
+                              $new_term = wp_insert_term($translation_term_name, $taxonomy);
                               if (!is_wp_error($new_term)) {
-                                var_dump("NEW TERM: $new_term");
                                 $translated_term_id = $new_term['term_id'];
 
                                 // Get TRID of original term
                                 $trid = apply_filters('wpml_element_trid', null, $original_term->term_id, 'tax_' . $taxonomy);
-                                var_dump("trid: $trid\n");
 
-                                // Connect the translation
+                                // Set up translation connection
                                 do_action('wpml_set_element_language_details', [
                                   'element_id' => $translated_term_id,
                                   'element_type' => 'tax_' . $taxonomy,
@@ -228,40 +126,29 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
                                   'language_code' => $language_code,
                                   'source_language_code' => $default_language
                                 ]);
-                              } else {
-                                var_dump("Error occured\n");
                               }
-                            } else {
-                              var_dump("Is different, creating it \n");
-                              // Update existing term if name is different
-                              wp_update_term($translated_term_id, $taxonomy, ['name' => $translation_term_name]);
                             }
 
                             if ($translated_term_id) {
                               $term_ids[] = $translated_term_id;
                             }
-
-                            // Switch back to default language for next iteration
-                            do_action('wpml_switch_language', $default_language);
                           }
                         }
                       }
-                      break;
                     }
                   }
                 }
               } else {
-                // Creating terms in default language
+                // This is a product in default language
                 foreach ($attr_values as $term_name) {
                   $existing_term = get_term_by('name', $term_name, $taxonomy);
 
                   if (!$existing_term) {
                     $new_term = wp_insert_term($term_name, $taxonomy);
-
                     if (!is_wp_error($new_term)) {
                       $term_id = $new_term['term_id'];
 
-                      // Set language for new term
+                      // Set language for the new term
                       do_action('wpml_set_element_language_details', [
                         'element_id' => $term_id,
                         'element_type' => 'tax_' . $taxonomy,
@@ -280,7 +167,6 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
 
               // Set the attribute for the product
               if (!empty($term_ids)) {
-
                 $attribute = new WC_Product_Attribute();
                 $attribute->set_id(wc_attribute_taxonomy_id_by_name($field_key));
                 $attribute->set_name($taxonomy);
@@ -289,7 +175,6 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
                 $attribute->set_variation(false);
 
                 $attributes = $product->get_attributes();
-
                 $attributes[] = $attribute;
                 $product->set_attributes($attributes);
               }
@@ -301,6 +186,7 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
 
           case 'acf':
             if (!empty($value)) {
+              // Remove 'acf_' prefix to get original field name
               $acf_field_name = str_replace('acf_', '', $field_key);
               $acf_fields[$acf_field_name] = $value;
             }
@@ -308,12 +194,12 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
             break;
 
           case 'text':
+            // Text fields can be used as-is
             break;
         }
-
-        // Handle special cases
         switch ($field_key) {
           case 'set_image_id':
+            // Convert URL to attachment ID using WordPress core function
             if (!empty($value)) {
               $attachment_id = attachment_url_to_postid($value);
               if ($attachment_id) {
@@ -323,6 +209,7 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
             break;
 
           case 'set_gallery_image_ids':
+            // Convert URLs to attachment IDs
             if (!empty($value)) {
               $gallery_urls = is_array($value) ? $value : explode('|', $value);
               $gallery_urls = array_map('trim', $gallery_urls);
@@ -333,8 +220,11 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
             break;
 
           case 'set_category_ids':
+            // Convert category names to IDs
             if (!is_array($value)) break;
             $category_ids = [];
+
+            // Switch to the product's language context for categories
             do_action('wpml_switch_language', $language_code);
 
             foreach ($value as $cat_name) {
@@ -343,20 +233,26 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
                 $category_ids[] = $term->term_id;
               } else {
                 $new_term = wp_insert_term($cat_name, 'product_cat');
+
                 if (!is_wp_error($new_term)) {
+                  // Register the category for translation
                   do_action('wpml_register_single_term', $new_term['term_id'], 'product_cat', $language_code);
                   $category_ids[] = $new_term['term_id'];
                 }
               }
             }
 
+            // Switch back to default language
             do_action('wpml_switch_language', $default_language);
+
             if (!empty($category_ids)) {
               $product->set_category_ids($category_ids);
             }
+
             break;
 
           default:
+            // Use the field key as the method name
             if (method_exists($product, $field_key)) {
               $product->$field_key($value);
             }
@@ -395,6 +291,7 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
       }
 
       $successful++;
+
       $output .= wim_notice('Successfully created product: %s (Language: %s, SKU: %s)', 'success', $product->get_name(), $language_code, $sku);
     } catch (Exception $e) {
       $failed++;
@@ -405,32 +302,6 @@ function wim_load_products($file_rows, $headers, $wim_product_fields)
   }
 
   $summary = wim_notice('Import completed: %d successful, %d failed', 'info', $successful, $failed);
+
   return $summary . $output;
-}
-
-function slugify($text, string $divider = '-')
-{
-  // replace non letter or digits by divider
-  $text = preg_replace('~[^\pL\d]+~u', $divider, $text);
-
-  // transliterate
-  $text = iconv('utf-8', 'us-ascii//TRANSLIT', $text);
-
-  // remove unwanted characters
-  $text = preg_replace('~[^-\w]+~', '', $text);
-
-  // trim
-  $text = trim($text, $divider);
-
-  // remove duplicate divider
-  $text = preg_replace('~-+~', $divider, $text);
-
-  // lowercase
-  $text = strtolower($text);
-
-  if (empty($text)) {
-    return 'n-a';
-  }
-
-  return $text;
 }
